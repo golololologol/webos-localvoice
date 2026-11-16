@@ -50,5 +50,24 @@
       "tokens.txt",
       "LICENSE"
     ]
+  },
+  {
+    "id": "phonon-2.5",
+    "name": "Phonon 2.5 (multilingual, includes Russian and English)",
+    "engine": "phonon",
+    "url": "https://huggingface.co/eschmidbauer/phonon-2.5-c/resolve/d137463efa79e61f8eecd528fe3760f53af5a1f5/phonon-2.5-c-weights-v1.tar.gz",
+    "folder": "c_weights",
+    "gzip": true,
+    "sha256": "ed622ca97bc4ec044c7ba5fb69c10985b1b3897e600dbf611840d9a0692b4cfe",
+    "bytes": 183463606,
+    "diskMB": 244,
+    "memoryMB": 440,
+    "headroomMB": 160,
+    "speed": "about 1–3.5 s per short command on the LG C4",
+    "files": [
+      "weights.bin",
+      "weights.json",
+      "tokens.txt"
+    ]
   }
 ]

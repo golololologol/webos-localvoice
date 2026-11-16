@@ -139,8 +139,9 @@ window.ModelView = (function () {
       }
       // A model that would not fit in the memory free now, counting what the one in use would give back.
       var spare = (s.mem_free || 0) + (s.running && s.running !== m.id ? s.engine_mb || 0 : 0);
-      if (!text && s.mem_total && s.chosen !== m.id && m.memoryMB > spare) {
-        text = 'Needs about ' + m.memoryMB + ' MB of memory, and ' + spare + ' MB is free now. Close an app before using it.';
+      var needed = m.memoryMB + (m.headroomMB || 0);
+      if (!text && s.mem_total && s.chosen !== m.id && needed > spare) {
+        text = 'Needs about ' + needed + ' MB of free memory, and ' + spare + ' MB is free now. Close an app before using it.';
         bad = true;
       }
       it.bar.style.display = share >= 0 || wait ? '' : 'none';

@@ -20,11 +20,15 @@ function files(id) { return models.find(id).files; }
 var TINY = 'moonshine-tiny-en', BASE = 'moonshine-base-en';
 
 var tests = {
-  'every listed model is pinned to a github release': function () {
+  'every listed model is pinned to a known source and checksum': function () {
     models.LIST.forEach(function (m) {
       assert.ok(/^[0-9a-f]{64}$/.test(m.sha256), m.id);
-      assert.ok(m.url.indexOf('https://github.com/k2-fsa/') === 0, m.id);
-      assert.ok(m.url.indexOf(m.folder.replace(/^\.\//, '')) > 0, m.id);
+      if (m.engine === 'phonon') {
+        assert.ok(/^https:\/\/huggingface\.co\/eschmidbauer\/phonon-2\.5-c\/resolve\/[0-9a-f]{40}\/phonon-2\.5-c-weights-v1\.tar\.gz$/.test(m.url), m.id);
+      } else {
+        assert.ok(m.url.indexOf('https://github.com/k2-fsa/') === 0, m.id);
+        assert.ok(m.url.indexOf(m.folder.replace(/^\.\//, '')) > 0, m.id);
+      }
       assert.ok(m.files.indexOf('tokens.txt') >= 0, m.id);
     });
   },
@@ -41,6 +45,13 @@ var tests = {
   'a model that is not on the TV cannot be chosen': function () {
     assert.ok(models.use(BASE).error);
     assert.ok(models.use('../../etc').error);
+  },
+  'the optional model needs a runnable engine': function () {
+    var id = 'phonon-2.5';
+    install(id);
+    assert.ok(models.use(id).error);
+    assert.strictEqual(models.status().models.some(function (m) { return m.id === id; }), false);
+    models.del(id);
   },
   'space needed covers the archive and the unpacked model': function () {
     var m = models.find(TINY);

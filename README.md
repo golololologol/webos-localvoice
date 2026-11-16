@@ -32,6 +32,8 @@ pip install ziglang
 python tools/build.py
 ```
 
+Build with `python tools/build.py --phonon` to offer Phonon 2.5 as an experimental multilingual model with Russian and English support. It can spell embedded English names phonetically in Cyrillic. The model appears in **Speech models** on TVs that can run the AArch64 dot-product engine. It downloads separately and needs more memory than the default English model.
+
 Run the tests with `node tests/detector.test.js`, `node tests/ctl.test.js`, `node tests/models.test.js`, `node tests/voiceinput.test.js` and `python tests/compat.test.py`.
 
 Compatibility reports go through a small Cloudflare Worker, [webos-compat](https://github.com/haywirephoenix/webos-compat), shared with Tailscale.

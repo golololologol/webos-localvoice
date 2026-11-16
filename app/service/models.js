@@ -21,15 +21,24 @@ var PROGRESS = 500;          // ms between progress reports
 var STALL_SECONDS = '30';    // curl gives up after this long below STALL_RATE bytes a second
 var STALL_RATE = '1024';
 var WORKING = ['downloading', 'checking', 'unpacking'];
+var probes = Object.create(null);
 
 function read(file) { try { return fs.readFileSync(file, 'utf8').trim(); } catch (e) { return ''; } }
 function find(id) { return LIST.filter(function (m) { return m.id === id; })[0]; }
+function enginePath(m) { return path.join(__dirname, '../runtime/bin/lvengine-' + m.engine); }
+function supported(m) {
+  if (!m || !m.engine) return true;
+  if (probes[m.engine] === undefined) {
+    probes[m.engine] = cp.spawnSync(enginePath(m), ['--probe'], {stdio: 'ignore'}).status === 0;
+  }
+  return probes[m.engine];
+}
 // A model is installed once all of its files are there.
 function installed(id) {
   var m = find(id);
   return !!m && m.files.every(function (f) { return fs.existsSync(path.join(INSTALLED, id, f)); });
 }
-function chosen() { var id = read(CHOSEN); return installed(id) ? id : ''; }
+function chosen() { var id = read(CHOSEN); return installed(id) && supported(find(id)) ? id : ''; }
 function remove(p) { cp.spawnSync('rm', ['-rf', p]); }
 function mkdirs(p) { cp.spawnSync('mkdir', ['-p', p]); }
 function freeMB() {
@@ -62,14 +71,16 @@ function tellService() {
 
 function status() {
   var free = freeMB();
-  return {free: free, chosen: chosen(), running: read(ENGINE_MODEL), job: job(), models: LIST.map(function (m) {
-    return {id: m.id, name: m.name, url: m.url, bytes: m.bytes, diskMB: m.diskMB, memoryMB: m.memoryMB, speed: m.speed, recommended: !!m.recommended,
+  return {free: free, chosen: chosen(), running: read(ENGINE_MODEL), job: job(), models: LIST.filter(supported).map(function (m) {
+    return {id: m.id, name: m.name, url: m.url, bytes: m.bytes, diskMB: m.diskMB, memoryMB: m.memoryMB,
+      headroomMB: m.headroomMB || 0, speed: m.speed, recommended: !!m.recommended,
       installed: installed(m.id), needMB: needMB(m), room: free >= needMB(m)};
   })};
 }
 function get(id) {
   var m = find(id);
   if (!m) return {error: 'Unknown model'};
+  if (!supported(m)) return {error: 'That model is unavailable on this TV'};
   if (working()) return {error: 'A download is already running'};
   if (installed(id)) return {error: 'That model is already downloaded'};
   var free = freeMB();
@@ -85,7 +96,9 @@ function cancel() {
   return {ok: true};
 }
 function use(id) {
-  if (!find(id) || !installed(id)) return {error: 'That model is not downloaded'};
+  var m = find(id);
+  if (!m || !installed(id)) return {error: 'That model is not downloaded'};
+  if (!supported(m)) return {error: 'That model is unavailable on this TV'};
   fs.writeFileSync(CHOSEN, id + '\n');
   tellService();
   return {ok: true};
@@ -97,7 +110,7 @@ function del(id) {
   var wasChosen = chosen() === id;
   remove(path.join(INSTALLED, id));
   if (wasChosen) {
-    var other = LIST.filter(function (m) { return installed(m.id); })[0];
+    var other = LIST.filter(function (m) { return supported(m) && installed(m.id); })[0];
     if (other) fs.writeFileSync(CHOSEN, other.id + '\n');
     else remove(CHOSEN);
     tellService();
@@ -124,7 +137,7 @@ function curlError(code, stderr) {
 }
 // The background half of get. Only this process removes what it leaves in NEW.
 function worker(id) {
-  var m = find(id), archive = NEW + '/model.tar.bz2', unpacked = NEW + '/unpacked';
+  var m = find(id), archive = NEW + '/model.tar', unpacked = NEW + '/unpacked';
   var state = {id: id, state: 'downloading', done: 0, total: m.bytes, rate: 0, pid: process.pid};
   var child = null, timer = null;
   function finish(update) {
@@ -161,7 +174,7 @@ function worker(id) {
     mkdirs(unpacked);
     // folder is the archive's top folder as tar lists it, "./" included where the archive has it.
     var strip = '--strip-components=' + m.folder.split('/').length;
-    step('unpacking', 'tar', ['-xjf', archive, '-C', unpacked, strip].concat(m.files.map(function (f) { return m.folder + '/' + f; })), function (code) {
+    step('unpacking', 'tar', [m.gzip ? '-xzf' : '-xjf', archive, '-C', unpacked, strip].concat(m.files.map(function (f) { return m.folder + '/' + f; })), function (code) {
       if (code !== 0) return fail('The file could not be unpacked');
       done();
     });
@@ -204,4 +217,5 @@ function main() {
   console.log(JSON.stringify(commands[command](id)));
 }
 if (require.main === module) main();
-module.exports = {curlError: curlError, needMB: needMB, find: find, status: status, get: get, use: use, del: del, migrate: migrate, LIST: LIST};
+module.exports = {curlError: curlError, needMB: needMB, find: find, installed: installed, supported: supported,
+  enginePath: enginePath, status: status, get: get, use: use, del: del, migrate: migrate, LIST: LIST};

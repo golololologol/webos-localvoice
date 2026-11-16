@@ -8,6 +8,7 @@
 'use strict';
 var fs = require('fs'), net = require('net'), path = require('path'), cp = require('child_process');
 var Detector = require('./detector');
+var Models = require('./models');
 
 var NAME = 'com.webos.service.voiceconductor';
 var API = '/usr/share/luna-service2/api-permissions.d/' + NAME + '.api.json';
@@ -187,11 +188,8 @@ function freeMB() {
   try { return +/MemAvailable:\s+(\d+)/.exec(fs.readFileSync('/proc/meminfo', 'utf8'))[1] / 1024; } catch (e) { return Infinity; }
 }
 function needMB(model) {
-  try {
-    var m = JSON.parse(fs.readFileSync(path.join(APP, 'models.json'), 'utf8')).filter(function (x) { return x.id === model; })[0];
-    if (m && m.memoryMB) return m.memoryMB;
-  } catch (e) {}
-  return 150;
+  var m = Models.find(model);
+  return m && m.memoryMB ? m.memoryMB + (m.headroomMB || 0) : 150;
 }
 // Calls back once the model has loaded, or with the reason it did not.
 function whenReady(cb) {
@@ -228,7 +226,11 @@ function modelDir() {
   var chosen = '', all = [];
   try { chosen = fs.readFileSync(MODEL, 'utf8').trim(); } catch (e) {}
   try {
-    all = fs.readdirSync(MODELS).filter(function (m) { return fs.existsSync(path.join(MODELS, m, 'tokens.txt')); });
+    all = fs.readdirSync(MODELS).filter(function (id) {
+      var m = Models.find(id);
+      if (m && m.engine) return Models.installed(id) && Models.supported(m);
+      return fs.existsSync(path.join(MODELS, id, 'tokens.txt'));
+    });
   } catch (e) {}
   if (engine.fails < 2 && all.indexOf(chosen) >= 0) return chosen;
   return all.filter(function (m) { return m !== chosen; })[0] || '';
@@ -255,9 +257,11 @@ function startEngine() {
     if (engineMode() === 'always') engine.retry = setTimeout(startEngine, LOW_MEMORY_RETRY);
     return;
   }
-  var c = cp.spawn(path.join(lib, 'ld-linux-armhf.so.3'),
-    ['--library-path', lib, path.join(RUNTIME, 'bin/lvengine'), path.join(MODELS, model)],
-    {stdio: ['pipe', 'pipe', 'pipe']});
+  var m = Models.find(model), dir = path.join(MODELS, model);
+  var native = m && m.engine;
+  var command = native ? Models.enginePath(m) : path.join(lib, 'ld-linux-armhf.so.3');
+  var args = native ? [dir] : ['--library-path', lib, path.join(RUNTIME, 'bin/lvengine'), dir];
+  var c = cp.spawn(command, args, {stdio: ['pipe', 'pipe', 'pipe']});
   var out = '';
   engine.child = c;
   engine.ready = false;
@@ -270,6 +274,7 @@ function startEngine() {
     var text = String(d).trim();
     if (text && !/libSegFault/.test(text)) warn('engine: ' + text.slice(0, 200));
   });
+  c.stdout.setEncoding('utf8');
   c.stdout.on('data', function (d) {
     out += d;
     var at;

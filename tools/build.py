@@ -5,7 +5,7 @@ Downloads the engine and the C libraries into .cache (each pinned to a checksum)
 compiles native/lvengine.c for 32-bit ARM and packs the IPK.
 
 Needs Python 3 and zig (pip install ziglang).
-Usage: tools/build.py [--out dist] [--sources]
+Usage: tools/build.py [--out dist] [--sources] [--phonon]
 
 Also writes the release's manifest to dist, and docs/apps.json, the Homebrew Channel repository
 served from GitHub Pages. The checksum in both is of this build, so publish the IPK of the same
@@ -31,6 +31,7 @@ CACHE = ROOT / ".cache"
 APP = "com.haywire.localvoice"
 CARD = APP + ".card"
 SHERPA = "2.0.1"
+PHONON = "510e1f77c7d596f36f70c0f4c793c66cc632c7fb"
 GITHUB = "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
 SOURCES = {
     "sherpa": (GITHUB + "v%s/sherpa-onnx-v%s-linux-arm-gnueabihf-shared.tar.bz2" % (SHERPA, SHERPA),
@@ -39,6 +40,8 @@ SOURCES = {
                "fd77cb0659326b75c08ce06b6b8649d2e13ef9a704a8e9212fec32cb97d42add"),
     "header": ("https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v%s/sherpa-onnx/c-api/c-api.h" % SHERPA,
                "5698f38ba09ad2bdf085c56a6cbbd7741acf15e25f4ce5c7097b9702cadf437f"),
+    "phonon": ("https://codeload.github.com/eschmidbauer/phonon-2.5-c/tar.gz/" + PHONON,
+               "109e90d4dbc9d0e995082404ba24dd57ceaa430375760d5856b8a5dc8f21a3ba"),
 }
 LAUNCHPAD = "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/"
 GLIBC = LAUNCHPAD + "glibc/2.35-0ubuntu3.8/"
@@ -111,7 +114,7 @@ def ubuntu_lib(tar, index, name):
     sys.exit("missing " + name)
 
 
-def runtime_files():
+def runtime_files(phonon=False):
     """(path under runtime/, bytes, mode) for the engine and its libraries."""
     exe = 0o755
     files = []
@@ -131,6 +134,8 @@ def runtime_files():
         files.append(("licences/" + name, fetch(name).read_bytes(), 0o644))
     files.append(("licences/THIRD-PARTY.md", (ROOT / "THIRD-PARTY.md").read_bytes().replace(b"\r\n", b"\n"), 0o644))
     files.append(("bin/lvengine", compile_engine(dict((f[0], f[1]) for f in files)), exe))
+    if phonon:
+        files.extend(phonon_files())
     return files
 
 
@@ -148,6 +153,32 @@ def compile_engine(files):
            "-Wl,--allow-shlib-undefined", "-o", str(out)]
     subprocess.run(cmd, check=True)
     return out.read_bytes()
+
+
+def phonon_files():
+    """Build the optional AArch64 engine with its own static C runtime."""
+    import ziglang
+
+    work = CACHE / "phonon"
+    work.mkdir(parents=True, exist_ok=True)
+    prefix = "phonon-2.5-c-" + PHONON
+    names = "blas threadpool tensor_ops encoder decoder mel weights tokens wav resample segment engine json"
+    sources = [name + ".c" for name in names.split()]
+    headers = ["phonon25.h", "blas.h", "threadpool.h"]
+    with tarfile.open(fetch("phonon")) as tar:
+        for name in sources + headers:
+            (work / name).write_bytes(tar.extractfile(prefix + "/csrc/" + name).read())
+        licence = tar.extractfile(prefix + "/LICENSE").read()
+    binary = work / "lvengine-phonon"
+    subprocess.run([sys.executable, "-m", "ziglang", "cc", "-target", "aarch64-linux-musl",
+                    "-mcpu=baseline+dotprod", "-static", "-s", "-D_GNU_SOURCE", "-std=c11", "-O3",
+                    "-ffast-math", "-funroll-loops", "-pthread", "-I" + str(work),
+                    str(ROOT / "native/lvengine-phonon.c"), *[str(work / name) for name in sources],
+                    "-lm", "-o", str(binary)], check=True)
+    musl = Path(ziglang.__file__).parent / "lib/libc/musl/COPYRIGHT"
+    return [("bin/lvengine-phonon", binary.read_bytes(), 0o755),
+            ("licences/phonon-2.5-c-LICENSE", licence, 0o644),
+            ("licences/musl-COPYRIGHT", musl.read_bytes(), 0o644)]
 
 
 def tgz(files):
@@ -222,6 +253,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", default=str(ROOT / "dist"))
     parser.add_argument("--sources", action="store_true")
+    parser.add_argument("--phonon", action="store_true", help="include the experimental multilingual AArch64 engine")
     args = parser.parse_args()
     info = json.loads((ROOT / "app/appinfo.json").read_text())
     version = info["version"]
@@ -230,7 +262,7 @@ def main():
     # The orb, built in the AI-Orb project and copied into orb/ (see orb/README.md), and its look.
     card_files += [("orb/" + n, (ROOT / "orb" / n).read_bytes(), 0o644) for n in ("ai-orb.js", "orb.config.json", "LICENSE")]
     card, _ = package(CARD, version, card_files, "The status card of Local Voice")
-    files = app_files() + [("runtime/" + n, d, m) for n, d, m in runtime_files()]
+    files = app_files() + [("runtime/" + n, d, m) for n, d, m in runtime_files(args.phonon)]
     files += [("card/card.ipk", card, 0o644), ("card/version", ('"version": "%s"' % version).encode(), 0o644)]
     # The card's page as well, for the app's demo mode, which shows it in a frame.
     files += [("card/" + n, d, m) for n, d, m in card_files if n.endswith((".html", ".css", ".js", ".json"))
