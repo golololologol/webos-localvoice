@@ -12,6 +12,7 @@ var Detector = require('./detector');
 var NAME = 'com.webos.service.voiceconductor';
 var API = '/usr/share/luna-service2/api-permissions.d/' + NAME + '.api.json';
 var VOICEINPUT = 'luna://com.webos.service.voiceinput/';
+var HIDRAW_SERVICE = '/usr/share/luna-service2/services.d/com.webos.service.voiceinput.hidraw.service';
 var MIC = '{"deviceType":"remote","keyType":"thinQtv"}';
 var MIC_SUBSCRIBE = '{"deviceType":"remote","keyType":"thinQtv","subscribe":true}';
 var APP = path.dirname(__dirname), RUNTIME = path.join(APP, 'runtime');
@@ -128,10 +129,11 @@ function bus(uri, body, done) {
 // launch falls back to a toast, so that a message is never lost.
 // nothing marks an error that is only silence (nothing heard or recognised), which the card shows
 // more gently than a fault.
-function card(state, message, hint, nothing, note) {
+function card(state, message, hint, nothing, note, waitForMic) {
   var c = {state: state, message: message || '', hint: hint || '', words: !fs.existsSync(NO_WORDS)};
   if (nothing) c.nothing = true;
   if (note) c.note = note;
+  if (waitForMic) c.waitForMic = waitForMic;
   bus(MANAGER + 'launch', {id: CARD_APP, params: {card: c}}, function (o) {
     if (o.returnValue === false && message) toast(message);
   });
@@ -141,7 +143,7 @@ function card(state, message, hint, nothing, note) {
 // shows a toast and no card. The words appearing in the box say the rest.
 function status(s, state, message, nothing) {
   if (s.quiet) return;
-  if (!s.plain) card(state, message, '', nothing, waitNote(s, state));
+  if (!s.plain) card(state, message, '', nothing, waitNote(s, state), state === 'listening' && s.waitForMic ? s.begun : 0);
   else if (state !== 'recognising') toast(message);
 }
 // While the model loads: keep holding a held button, or wait for the words.
@@ -386,7 +388,10 @@ function watchMeter(m, h) {
   h.subscriptionAdd('level', m);
   meters[m.uniqueToken()] = m;
   log('level feed: ' + Object.keys(meters).length + ' watching');
-  m.respond(JSON.stringify({returnValue: true, subscribed: true, mean: 0, speechLevel: speechLevel()}));
+  var first = {returnValue: true, subscribed: true, mean: 0, speechLevel: speechLevel()};
+  // A card can finish loading after capture has already started.
+  if (current && current.state === 'listening' && current.waitForMic && current.bytes) first.micReady = current.begun;
+  m.respond(JSON.stringify(first));
 }
 
 function send(s, o) {
@@ -500,7 +505,8 @@ function connect(s) {
     capture(s, 'stream ended');
   });
   c.on('data', function (d) {
-    if (s.state !== 'listening') return;
+    if (s.closed || s.state !== 'listening') return;
+    if (!s.bytes && s.waitForMic) meterEvent({micReady: s.begun});
     s.bytes += d.length;
     s.pending = Buffer.concat([s.pending, d]);
     while (s.pending.length >= WINDOW) {
@@ -514,7 +520,7 @@ function connect(s) {
         if (n === LEVEL_LOG) log('session ' + s.id + ' levels ' + s.levels.join(' '));
       }
       if (n % 2 === 0) send(s, {event: 'sttVoiceLevel', level: Math.min(100, Math.round(mean / 30))});
-      if (n > Detector.GUARD) {
+      if (n > s.detector.options.guard) {
         s.means.push(mean);
         meterEvent({mean: Math.round(mean), speechLevel: s.speechLevel});
       }
@@ -608,10 +614,13 @@ function start(m) {
   // This app's own page can ask for a phrase with no orb or toast: {"localvoice": {"quiet": true}}.
   var quiet = false;
   try { quiet = !!(m && JSON.parse(m.payload()).localvoice.quiet); } catch (e) {}
+  var hidrawRemote = !m && fs.existsSync(HIDRAW_SERVICE);
   var s = current = {id: count, message: m, quiet: quiet, keepCard: false, plain: field, ticket: 'localvoice' + count, begun: Date.now(), state: 'listening',
     speechLevel: speechLevel(), tuning: tuneAsked(), means: [], windows: [], pending: Buffer.alloc(0), levels: [], bytes: 0, closed: false,
-    sock: null, stream: null, socketPath: null, stopped: false, retried: false};
-  s.detector = new Detector({speechLevel: s.speechLevel});
+    sock: null, stream: null, socketPath: null, stopped: false, retried: false, waitForMic: hidrawRemote && !field};
+  // The split HID capture service can deliver speech in the first window. Keep the startup
+  // noise guard for the legacy service and app-driven recognition.
+  s.detector = new Detector({speechLevel: s.speechLevel, guard: hidrawRemote ? 0 : Detector.GUARD});
   send(s, {event: 'registered'});
   send(s, {event: 'sttStart'});
   if (blocked()) return fail(s, BLOCKED, 'blocked');
@@ -627,8 +636,8 @@ function start(m) {
   } else {
     clearTimeout(engine.idle);
   }
-  status(s, 'listening', 'Listening');
   openMic(s);
+  status(s, 'listening', 'Listening');
 }
 function cancel(m) {
   var ticket = '';

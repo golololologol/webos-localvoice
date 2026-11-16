@@ -39,3 +39,34 @@ var mic = source.slice(source.indexOf('function openMic('), source.indexOf('// S
   assert.deepStrictEqual(attempts, [socketPath]);
 });
 console.log('ok   voiceinput connects to the socket from the stream reply');
+
+// The card may subscribe before or after the first PCM packet.
+var socket = new EventEmitter();
+var session = {state: 'listening', waitForMic: true, begun: 123, bytes: 0, pending: Buffer.alloc(0)};
+var levels = source.slice(source.indexOf('var meters = {};'), source.indexOf('function send('));
+var service = {
+  current: session, Buffer: Buffer, WINDOW: 3200,
+  net: {connect: function () { return socket; }},
+  speechLevel: function () { return 150; },
+  log: function () {}
+};
+vm.runInNewContext(levels + mic, service);
+
+function watch(token) {
+  var events = [];
+  service.watchMeter({
+    uniqueToken: function () { return token; },
+    respond: function (msg) { events.push(JSON.parse(msg)); }
+  }, {subscriptionAdd: function () {}});
+  return events;
+}
+
+service.connect(session);
+var early = watch('early');
+assert.strictEqual(early[0].micReady, undefined);
+socket.emit('data', Buffer.alloc(2));
+socket.emit('data', Buffer.alloc(2));
+assert.strictEqual(early.length, 2);
+assert.strictEqual(early[1].micReady, session.begun);
+assert.strictEqual(watch('late')[0].micReady, session.begun);
+console.log('ok   the card sees the first PCM even when it subscribes late');
