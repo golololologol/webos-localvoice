@@ -169,6 +169,8 @@ def phonon_files():
         for name in sources + headers:
             (work / name).write_bytes(tar.extractfile(prefix + "/csrc/" + name).read())
         licence = tar.extractfile(prefix + "/LICENSE").read()
+    subprocess.run(["patch", "--batch", "--fuzz=0", "-p1", "-i",
+                    str(ROOT / "native/phonon-decoder-weights.patch")], cwd=work, check=True)
     binary = work / "lvengine-phonon"
     subprocess.run([sys.executable, "-m", "ziglang", "cc", "-target", "aarch64-linux-musl",
                     "-mcpu=baseline+dotprod", "-static", "-s", "-D_GNU_SOURCE", "-std=c11", "-O3",

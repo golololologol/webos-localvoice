@@ -1,0 +1,235 @@
+--- a/phonon25.h
++++ b/phonon25.h
+@@ -181,21 +181,22 @@
+     const float       *projector_b;   /* [640] */
+ } EncoderWeights;
+
+-/* The decoder tables are int8 with one fp32 scale per row on disk (exact: the container holds them as int6 with a
+- * per-row fp16 scale) and are expanded to fp32 when loaded. Streaming them as int8 was measured slower than fp32 on
+- * Apple M-series – the per-element widen/convert/multiply outweighs the bytes saved – so the expansion happens once. */
+-#define P25_DEC_OWNED 8   /* fp32 buffers the loader allocates for the decoder */
+-
+-typedef struct {
+-    const float *embed_w;                        /* [8193, 640]; row 8192 (blank) is all zeros */
+-    const float *lstm_w_ih[P25_LSTM_LAYERS];      /* [2560, 640]  PyTorch layout [4H, in], gate order i, f, g, o */
+-    const float *lstm_w_hh[P25_LSTM_LAYERS];      /* [2560, 640] */
++/* Decoder matrices stay mapped as int8 with one scale per output row. */
++typedef struct {
++    const signed char *values;
++    const float *scales;
++} DecoderMatrix;
++
++typedef struct {
++    DecoderMatrix embed_w;                        /* [8193, 640]; row 8192 (blank) is all zeros */
++    DecoderMatrix lstm_w_ih[P25_LSTM_LAYERS];      /* [2560, 640]  PyTorch layout [4H, in], gate order i, f, g, o */
++    DecoderMatrix lstm_w_hh[P25_LSTM_LAYERS];      /* [2560, 640] */
+     const float *lstm_b_ih[P25_LSTM_LAYERS];      /* [2560] */
+     const float *lstm_b_hh[P25_LSTM_LAYERS];      /* [2560] */
+-    const float *proj_w, *proj_b;                /* decoder_projector [640, 640] ([out, in]), [640] */
+-    const float *head_w, *head_b;                /* joint head [8198, 640] ([out, in]), [8198] */
+-    float       *owned[P25_DEC_OWNED];            /* the expanded tables, freed by p25_free_weights */
+-    int          n_owned;
++    DecoderMatrix proj_w;
++    const float *proj_b;                /* decoder_projector [640, 640] ([out, in]), [640] */
++    DecoderMatrix head_w;
++    const float *head_b;                /* joint head [8198, 640] ([out, in]), [8198] */
+ } DecoderWeights;
+
+ typedef struct {
+--- a/weights.c
++++ b/weights.c
+@@ -330,37 +330,23 @@
+     }
+ }
+
+-/* int8 table [rows, cols] with one scale per row, expanded to an fp32 buffer that the model owns: w = q · scale, the
+- * same fp32 values the converter would have written. */
+-static const float *expand_q8_rows(Manifest *mf, DecoderWeights *dec, const char *name, int rows, int cols)
++static DecoderMatrix lookup_decoder_matrix(Manifest *mf, const char *name, int rows, int cols)
+ {
+     const WEntry *e = find_entry(mf, name);
+-    if (!e) { fprintf(stderr, "weights: '%s' missing\n", name); mf->errors++; return NULL; }
++    if (!e) { fprintf(stderr, "weights: '%s' missing\n", name); mf->errors++; return (DecoderMatrix){0}; }
+     if (e->dtype != DT_I8 || e->ndim != 2 || e->shape[0] != rows || e->shape[1] != cols) {
+         fprintf(stderr, "weights: '%s' is %s [%lld, %lld], int8 [%d, %d] expected\n", name, dtype_name(e->dtype),
+                 e->ndim > 0 ? e->shape[0] : -1, e->ndim > 1 ? e->shape[1] : -1, rows, cols);
+-        mf->errors++; return NULL;
++        mf->errors++; return (DecoderMatrix){0};
+     }
+     if (!in_range(mf, e->offset, (size_t)rows * cols) || !in_range_f32(mf, e->scales_offset, (size_t)rows * sizeof(float))) {
+         fprintf(stderr, "weights: '%s' int8 data out of range\n", name);
+-        mf->errors++; return NULL;
+-    }
+-    if (dec->n_owned >= P25_DEC_OWNED) {
+-        fprintf(stderr, "weights: too many expanded decoder tables\n");
+-        mf->errors++; return NULL;
+-    }
+-    const signed char *q = (const signed char *)(mf->base + e->offset);
+-    const float *scales = (const float *)(mf->base + e->scales_offset);
+-    float *w = (float *)malloc((size_t)rows * cols * sizeof(float));
+-    if (!w) { fprintf(stderr, "weights: out of memory expanding '%s'\n", name); mf->errors++; return NULL; }
+-    for (int r = 0; r < rows; r++) {
+-        float s = scales[r];
+-        const signed char *qr = q + (size_t)r * cols;
+-        float *wr = w + (size_t)r * cols;
+-        for (int c = 0; c < cols; c++) wr[c] = (float)qr[c] * s;
+-    }
+-    dec->owned[dec->n_owned++] = w;
+-    return w;
++        mf->errors++; return (DecoderMatrix){0};
++    }
++    return (DecoderMatrix){
++        (const signed char *)(mf->base + e->offset),
++        (const float *)(mf->base + e->scales_offset)
++    };
+ }
+
+ /* ── Loading ─────────────────────────────────────────────────────────────── */
+@@ -497,18 +483,18 @@
+     F(enc.projector_b, "encoder_projector.bias", P25_JOINT_DIM);
+
+     DecoderWeights *dec = &m->dec;
+-    dec->embed_w = expand_q8_rows(&mf, dec, "decoder.embedding.weight", P25_VOCAB, P25_EMBED_DIM);
++    dec->embed_w = lookup_decoder_matrix(&mf, "decoder.embedding.weight", P25_VOCAB, P25_EMBED_DIM);
+     for (int l = 0; l < P25_LSTM_LAYERS; l++) {
+         char buf[128];
+         int in = l == 0 ? P25_EMBED_DIM : H;
+-        snprintf(buf, sizeof(buf), "decoder.lstm.weight_ih_l%d", l); dec->lstm_w_ih[l] = expand_q8_rows(&mf, dec, buf, 4 * H, in);
+-        snprintf(buf, sizeof(buf), "decoder.lstm.weight_hh_l%d", l); dec->lstm_w_hh[l] = expand_q8_rows(&mf, dec, buf, 4 * H, H);
++        snprintf(buf, sizeof(buf), "decoder.lstm.weight_ih_l%d", l); dec->lstm_w_ih[l] = lookup_decoder_matrix(&mf, buf, 4 * H, in);
++        snprintf(buf, sizeof(buf), "decoder.lstm.weight_hh_l%d", l); dec->lstm_w_hh[l] = lookup_decoder_matrix(&mf, buf, 4 * H, H);
+         snprintf(buf, sizeof(buf), "decoder.lstm.bias_ih_l%d",   l); dec->lstm_b_ih[l] = lookup_f32(&mf, buf, 4 * H);
+         snprintf(buf, sizeof(buf), "decoder.lstm.bias_hh_l%d",   l); dec->lstm_b_hh[l] = lookup_f32(&mf, buf, 4 * H);
+     }
+-    dec->proj_w = expand_q8_rows(&mf, dec, "decoder.decoder_projector.weight", P25_JOINT_DIM, H);
++    dec->proj_w = lookup_decoder_matrix(&mf, "decoder.decoder_projector.weight", P25_JOINT_DIM, H);
+     F(dec.proj_b, "decoder.decoder_projector.bias", P25_JOINT_DIM);
+-    dec->head_w = expand_q8_rows(&mf, dec, "joint.head.weight", P25_N_LOGITS, P25_JOINT_DIM);
++    dec->head_w = lookup_decoder_matrix(&mf, "joint.head.weight", P25_N_LOGITS, P25_JOINT_DIM);
+     F(dec.head_b, "joint.head.bias", P25_N_LOGITS);
+
+ #undef F
+@@ -573,8 +559,6 @@
+ void p25_free_weights(P25Model *m)
+ {
+     free_codes(m);
+-    for (int i = 0; i < m->dec.n_owned; i++) free(m->dec.owned[i]);
+-    m->dec.n_owned = 0;
+     if (m->map) {
+         munmap(m->map, m->map_len);
+         m->map = NULL;
+--- a/decoder.c
++++ b/decoder.c
+@@ -7,8 +7,8 @@
+  */
+
+ #include "phonon25.h"
+-#include "blas.h"
+ #include "threadpool.h"
++#include <arm_neon.h>
+ #include <stdlib.h>
+ #include <string.h>
+ #include <math.h>
+@@ -17,12 +17,51 @@
+
+ #define sigmoid_f p25_sigmoid   /* the clamped one from phonon25.h */
+
++/* All decoder rows are multiples of 16. Apply the row scale once, after the float dot product,
++ * to keep the decoder's repeated matrix reads four times smaller. */
++_Static_assert(P25_EMBED_DIM % 16 == 0 && P25_LSTM_HIDDEN % 16 == 0 && P25_JOINT_DIM % 16 == 0,
++               "decoder dot product requires 16-column blocks");
++
++static float decoder_dot(DecoderMatrix w, int row, const float *x, int n)
++{
++    const signed char *q = w.values + (size_t)row * n;
++    float32x4_t sum0 = vdupq_n_f32(0), sum1 = sum0, sum2 = sum0, sum3 = sum0;
++    for (int i = 0; i < n; i += 16) {
++        int8x16_t packed = vld1q_s8(q + i);
++        int16x8_t lo = vmovl_s8(vget_low_s8(packed));
++        int16x8_t hi = vmovl_high_s8(packed);
++        sum0 = vfmaq_f32(sum0, vcvtq_f32_s32(vmovl_s16(vget_low_s16(lo))), vld1q_f32(x + i));
++        sum1 = vfmaq_f32(sum1, vcvtq_f32_s32(vmovl_high_s16(lo)), vld1q_f32(x + i + 4));
++        sum2 = vfmaq_f32(sum2, vcvtq_f32_s32(vmovl_s16(vget_low_s16(hi))), vld1q_f32(x + i + 8));
++        sum3 = vfmaq_f32(sum3, vcvtq_f32_s32(vmovl_high_s16(hi)), vld1q_f32(x + i + 12));
++    }
++    return vaddvq_f32(vaddq_f32(vaddq_f32(sum0, sum1), vaddq_f32(sum2, sum3))) * w.scales[row];
++}
++
++struct decoder_gemv_args { DecoderMatrix w; const float *x; float *y; int rows, cols; };
++
++static void decoder_gemv_worker(int tid, int nt, void *aux)
++{
++    struct decoder_gemv_args *a = aux;
++    int first = a->rows * tid / nt;
++    int last = a->rows * (tid + 1) / nt;
++    for (int row = first; row < last; row++)
++        a->y[row] = decoder_dot(a->w, row, a->x, a->cols);
++}
++
++static void decoder_gemv(DecoderMatrix w, const float *x, float *y, int rows, int cols)
++{
++    struct decoder_gemv_args args = { w, x, y, rows, cols };
++    if (rows * cols >= (2 << 20)) p25_parallel(p25_pool(), decoder_gemv_worker, &args);
++    else decoder_gemv_worker(0, 1, &args);
++}
++
+ /* LSTM pre-activations for gate rows [r0, r1): gates[r] = W_ih[r]·x + W_hh[r]·h + b_ih[r] + b_hh[r].
+- * One pass over both matrices per layer, spread over the pool: the two 6.5 MB matrices per layer are the bulk of
+- * what the decoder streams, and reading them on one thread was most of the decode time. */
++ * One pass over both matrices per layer, spread over the pool. */
+ struct lstm_gates_args {
+     const float *x; int input_size;
+-    const float *W_ih, *W_hh, *b_ih, *b_hh, *h;
++    DecoderMatrix W_ih, W_hh;
++    const float *b_ih, *b_hh, *h;
+     float *gates;
+ };
+
+@@ -32,14 +71,14 @@
+     enum { H = P25_LSTM_HIDDEN };
+     int r0 = (4 * H * tid) / nt, r1 = (4 * H * (tid + 1)) / nt;
+     for (int r = r0; r < r1; r++)
+-        a->gates[r] = p25_dot_f32(a->W_ih + (size_t)r * a->input_size, a->x, a->input_size)
+-                    + p25_dot_f32(a->W_hh + (size_t)r * H, a->h, H)
++        a->gates[r] = decoder_dot(a->W_ih, r, a->x, a->input_size)
++                    + decoder_dot(a->W_hh, r, a->h, H)
+                     + a->b_ih[r] + a->b_hh[r];
+ }
+
+ /* One nn.LSTM step in PyTorch's layout, gate rows ordered i, f, g, o. */
+ static void lstm_step(const float *x, int input_size,
+-                      const float *W_ih, const float *W_hh, const float *b_ih, const float *b_hh,
++                      DecoderMatrix W_ih, DecoderMatrix W_hh, const float *b_ih, const float *b_hh,
+                       float *h, float *c)
+ {
+     enum { H = P25_LSTM_HIDDEN };
+@@ -62,14 +101,17 @@
+ void p25_decoder_step(const P25Model *m, int token_id, LSTMState *state, float *dec_out)
+ {
+     const DecoderWeights *d = &m->dec;
+-    const float *emb = d->embed_w + (size_t)token_id * P25_EMBED_DIM;
++    const signed char *values = d->embed_w.values + (size_t)token_id * P25_EMBED_DIM;
++    float emb[P25_EMBED_DIM];
++    float scale = d->embed_w.scales[token_id];
++    for (int i = 0; i < P25_EMBED_DIM; i++) emb[i] = values[i] * scale;
+
+     lstm_step(emb, P25_EMBED_DIM, d->lstm_w_ih[0], d->lstm_w_hh[0], d->lstm_b_ih[0], d->lstm_b_hh[0],
+               state->h[0], state->c[0]);
+     lstm_step(state->h[0], P25_LSTM_HIDDEN, d->lstm_w_ih[1], d->lstm_w_hh[1], d->lstm_b_ih[1], d->lstm_b_hh[1],
+               state->h[1], state->c[1]);
+
+-    p25_gemv_rows(d->proj_w, state->h[1], dec_out, P25_JOINT_DIM, P25_LSTM_HIDDEN);
++    decoder_gemv(d->proj_w, state->h[1], dec_out, P25_JOINT_DIM, P25_LSTM_HIDDEN);
+     p25_bias_add(dec_out, d->proj_b, P25_JOINT_DIM);
+ }
+
+@@ -83,8 +125,8 @@
+         float v = enc_t[i] + dec_out[i];
+         hidden[i] = v > 0.0f ? v : 0.0f;
+     }
+-    p25_gemv_rows(d->head_w, hidden, logits, P25_N_LOGITS, P25_JOINT_DIM);
++    decoder_gemv(d->head_w, hidden, logits, P25_N_LOGITS, P25_JOINT_DIM);
+     p25_bias_add(logits, d->head_b, P25_N_LOGITS);
+ }
+
+ /* ── Greedy TDT decoding ─────────────────────────────────────────────────── */
