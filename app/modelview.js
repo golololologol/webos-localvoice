@@ -12,11 +12,19 @@ window.ModelView = (function () {
   var diskText = document.getElementById('diskText'), diskFill = document.getElementById('diskFill');
   var memText = document.getElementById('memText'), memFill = document.getElementById('memFill');
   var BUSY_LABELS = {get: 'Starting', cancel: 'Cancelling', use: 'Switching', delete: 'Deleting'};
+  var LANGUAGES = {
+    bg: 'Bulgarian', hr: 'Croatian', cs: 'Czech', da: 'Danish', nl: 'Dutch', en: 'English',
+    et: 'Estonian', fi: 'Finnish', fr: 'French', de: 'German', el: 'Greek', hu: 'Hungarian',
+    it: 'Italian', lv: 'Latvian', lt: 'Lithuanian', mt: 'Maltese', pl: 'Polish', pt: 'Portuguese',
+    ro: 'Romanian', ru: 'Russian', sk: 'Slovak', sl: 'Slovenian', es: 'Spanish', sv: 'Swedish',
+    uk: 'Ukrainian'
+  };
   var ctl = null, onClose = null, timer = null, waiting = false, status = null, full = true, lastState = '';
   // The button pressed, shown as busy until a full read taken after its command has come back.
   // It keeps the focus, so it is ignored rather than disabled.
   var pressed = null, finished = 0, ticket = 0;
   var items = {};
+  var dismissLanguages = null;
 
   function el(tag, className, parent) {
     var e = document.createElement(tag);
@@ -43,13 +51,68 @@ window.ModelView = (function () {
   function allow(button, on) {
     if (button !== pressed) button.disabled = !on;
   }
+  function languageTag(m, header) {
+    var codes = m.languages || [];
+    if (!codes.length) return null;
+    var wrap = el('div', 'languages', header);
+    var button = el('button', 'language-tag', wrap);
+    var names = el('ul', 'language-list', wrap);
+    var count = codes.length + (codes.length === 1 ? ' language' : ' languages');
+    var pinned = false;
+    button.type = 'button';
+    button.textContent = codes.length > 3 ? count : codes.join(', ').toUpperCase();
+    button.setAttribute('aria-label', 'Supported languages for ' + m.name + ', ' + count);
+    button.setAttribute('aria-controls', names.id = 'languages-' + m.id);
+    names.setAttribute('aria-label', 'Supported languages');
+    codes.forEach(function (code) { el('li', '', names).textContent = LANGUAGES[code] || code; });
+
+    function hide() {
+      pinned = false;
+      names.hidden = true;
+      button.setAttribute('aria-expanded', 'false');
+      if (dismissLanguages === hide) dismissLanguages = null;
+    }
+    function show() {
+      if (dismissLanguages && dismissLanguages !== hide) dismissLanguages();
+      dismissLanguages = hide;
+      names.hidden = false;
+      button.setAttribute('aria-expanded', 'true');
+      var below = list.parentNode.getBoundingClientRect().bottom - button.getBoundingClientRect().bottom;
+      names.className = 'language-list' + (below < names.getBoundingClientRect().height ? ' above' : '');
+    }
+    hide();
+    wrap.addEventListener('mouseenter', show);
+    wrap.addEventListener('mouseleave', function () { if (!pinned) hide(); });
+    button.addEventListener('click', function () {
+      if (pinned) return hide();
+      button.focus();
+      pinned = true;
+      show();
+    });
+    wrap.addEventListener('focusout', function (e) { if (!wrap.contains(e.relatedTarget)) hide(); });
+    button.addEventListener('keydown', function (e) {
+      if (names.hidden) return;
+      if (e.keyCode === 27 || e.keyCode === 461) hide();
+      else if (pinned && (e.keyCode === 38 || e.keyCode === 40) && names.scrollHeight > names.clientHeight) {
+        names.scrollTop += e.keyCode === 38 ? -30 : 30;
+      } else return;
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    return button;
+  }
   function item(m) {
     if (items[m.id]) return items[m.id];
     var row = el('div', 'model', list), it = {row: row};
-    var title = el('h2', '', row);
+    var header = el('div', 'model-heading', row);
+    var title = el('h2', '', header);
     title.textContent = m.name;
     if (m.recommended) el('span', 'tag', title).textContent = 'Recommended';
-    el('p', 'facts', row).textContent = mb(m.bytes) + ' MB download, ' + m.diskMB + ' MB on disk, about ' + m.memoryMB + ' MB of memory, ' + m.speed;
+    it.language = languageTag(m, header);
+    var memory = m.headroomMB ? m.memoryMB + ' MiB memory budget' : 'about ' + m.memoryMB + ' MiB of memory';
+    el('p', 'facts', row).textContent = mb(m.bytes) + ' MB download, ' + m.diskMB + ' MiB on disk, ' + memory +
+      (m.speed ? ', ' + m.speed : '');
+    if (m.description) el('p', 'model-description', row).textContent = m.description;
     el('p', 'url', row).textContent = m.url;
     it.bar = el('div', 'bar', row);
     it.fill = el('i', '', it.bar);
@@ -158,7 +221,9 @@ window.ModelView = (function () {
   function focusRows() {
     var rows = [];
     Object.keys(items).forEach(function (id) {
-      var r = [items[id].primary, items[id].remove].filter(usable);
+      var it = items[id];
+      var r = [it.primary, it.remove].filter(usable);
+      if (it.language) r.push(it.language);
       if (r.length) rows.push(r);
     });
     rows.push([closeButton]);
@@ -192,6 +257,7 @@ window.ModelView = (function () {
     });
   }
   function close() {
+    if (dismissLanguages) dismissLanguages();
     clearInterval(timer);
     timer = null;
     panel.style.display = 'none';

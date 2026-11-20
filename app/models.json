@@ -2,6 +2,7 @@
   {
     "id": "parakeet-tdt-110m-en",
     "name": "Parakeet TDT 110M (quantized)",
+    "languages": ["en"],
     "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8.tar.bz2",
     "folder": "./sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8",
     "sha256": "f628312e9fdf8686374cb01a69425c41732529d540860311f16f37cbc32cfe9b",
@@ -20,6 +21,7 @@
   {
     "id": "moonshine-tiny-en",
     "name": "Moonshine tiny-en (quantized)",
+    "languages": ["en"],
     "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27.tar.bz2",
     "folder": "sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27",
     "sha256": "9ec31b342d8fa3240c3b81b8f82e1cf7e3ac467c93ca5a999b741d5887164f8d",
@@ -37,6 +39,7 @@
   {
     "id": "moonshine-base-en",
     "name": "Moonshine base-en (quantized)",
+    "languages": ["en"],
     "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-base-en-quantized-2026-02-27.tar.bz2",
     "folder": "sherpa-onnx-moonshine-base-en-quantized-2026-02-27",
     "sha256": "43232c1d13013d37317163baec3135bd771a186a4356f28c889bab453bb0e891",
@@ -53,7 +56,9 @@
   },
   {
     "id": "phonon-2.5",
-    "name": "Phonon 2.5 (multilingual, includes Russian and English)",
+    "name": "Phonon 2.5",
+    "languages": ["bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it", "lv", "lt", "mt", "pl", "pt", "ro", "ru", "sk", "sl", "es", "sv", "uk"],
+    "description": "Multilingual speech recognition for European languages. Accuracy can drop when you switch languages in the same phrase. Runs fastest on CPUs with dot-product support.",
     "engine": "phonon",
     "url": "https://huggingface.co/eschmidbauer/phonon-2.5-c/resolve/d137463efa79e61f8eecd528fe3760f53af5a1f5/phonon-2.5-c-weights-v1.tar.gz",
     "folder": "c_weights",
@@ -63,7 +68,6 @@
     "diskMB": 244,
     "memoryMB": 440,
     "headroomMB": 160,
-    "speed": "about 1–3.5 s per short command on the LG C4",
     "files": [
       "weights.bin",
       "weights.json",

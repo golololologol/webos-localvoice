@@ -2,7 +2,7 @@
 
 Speech recognition that runs on a rooted LG webOS TV. The remote's microphone button, and apps with their own such as YouTube, get their text from a model on the TV instead of LG's cloud service, with no changes to the apps. Audio is never saved or sent anywhere.
 
-Looking for testers! Built on an OLED55BX6LB (webOS 5.4.3, MR20 remote). If you try it on another TV, send a report from the app's **Compatibility** card: it's anonymous, and the results go in [COMPATIBILITY.md](COMPATIBILITY.md).
+This fork adds support for newer Magic Remote audio services, faster microphone startup, and the multilingual Phonon 2.5 model. It is based on [the original Local Voice](https://github.com/haywirephoenix/webos-localvoice), which was developed on an LG BX with webOS 5.4. The microphone updates were tested on LG C3 and C4 TVs.
 
 - Hold the remote's microphone button and speak: the words go into the selected text box, Kodi's keyboard, or a YouTube search.
 - Apps with their own microphone button get the words as their speech result.
@@ -15,11 +15,22 @@ Looking for testers! Built on an OLED55BX6LB (webOS 5.4.3, MR20 remote). If you 
 
 Needs root and the Homebrew Channel.
 
-1. In Homebrew Channel, open **Settings**, choose **Add repository** and enter `https://haywirephoenix.github.io/webos-homebrew/apps.json`, which lists Local Voice and [Tailscale](https://github.com/haywirephoenix/webos-tailscale). The older address, `.../webos-localvoice/apps.json`, still works.
-2. Install **Local Voice** from the list of apps.
-3. Open **Local Voice**, choose **Turn on**, then download a model in **Speech models**. Parakeet TDT 110M is recommended.
+1. Download the IPK from [this fork's releases](https://github.com/golololologol/webos-localvoice/releases) and install it on the TV with `ares-install -d <tv> <file.ipk>`. The fork uses the original app ID and reads the existing settings and downloaded models.
+2. Open **Local Voice**, choose **Turn on**, then download a model in **Speech models**. Parakeet TDT 110M is recommended for English.
 
-After an update, turn Local Voice off and on again. With lifesgoodwithoutspying's **Voice** switch on, enable the Local Voice entries in its **Exceptions** tab and apply. TVs with a separate `voiceinput_hidraw` service also need a lifesgoodwithoutspying version that offers that exception. See [Installing](https://github.com/haywirephoenix/webos-localvoice/wiki/Installing).
+After an update, turn Local Voice off and on again. With lifesgoodwithoutspying's **Voice** switch on, enable the Local Voice entries in its **Exceptions** tab and apply. TVs with a separate `voiceinput_hidraw` service also need a build that offers the [Magic Remote HID audio capture exception](https://github.com/lewisdoesstuff/lifesgoodwithoutspying/pull/72). See the upstream [installation notes](https://github.com/haywirephoenix/webos-localvoice/wiki/Installing).
+
+## Speech models
+
+[Phonon 2.5](https://huggingface.co/FermionResearch/Phonon-2.5) recognizes 25 European languages, including English, Russian and Ukrainian. Accuracy can drop when you switch languages within a phrase. The TV downloads the [converted C weights](https://huggingface.co/eschmidbauer/phonon-2.5-c) separately. They take 183 MB to download and 244 MiB on disk.
+
+Phonon uses the faster int8 path on 64-bit ARM CPUs with dot-product instructions and a float32 path on other 64-bit ARM CPUs and ARMv7 CPUs with NEON and VFPv4. It needs about 600 MiB of available memory to start, including headroom for the TV. Moonshine tiny-en is the smallest model. Open a model's language badge with the Magic Remote or hover over it to see the supported languages.
+
+## YouTube AdFree
+
+The optional [YouTube AdFree 0.9.2 patch](tools/youtube-adfree-localvoice.js) lets voice searches open inside a running YouTube page. Turn on **Toasts** in Local Voice to see search feedback.
+
+Copy the AdFree app's `webOSUserScripts/userScript.js` off the TV and keep that copy as a backup. Run `node tools/youtube-adfree-localvoice.js userScript.js userScript.patched.js` on your computer. Replace the installed AdFree copy with `userScript.patched.js` under the original name, then reopen YouTube. Repeat after an AdFree reinstall if it restores the script. The tool checks the original script's checksum before it makes a patched copy.
 
 ## Documentation
 
@@ -32,11 +43,11 @@ pip install ziglang
 python tools/build.py
 ```
 
-With `patch` installed, build with `python tools/build.py --phonon` to offer Phonon 2.5 as an experimental multilingual model with Russian and English support. It can spell embedded English names phonetically in Cyrillic. The model appears in **Speech models** on TVs that can run the AArch64 dot-product engine. It downloads separately and needs more memory than the default English model.
+Install the `patch` command before building. Pass `--no-phonon` to build an IPK with just the original speech engine.
 
 Run the tests with `node tests/detector.test.js`, `node tests/ctl.test.js`, `node tests/models.test.js`, `node tests/voiceinput.test.js` and `python tests/compat.test.py`.
 
-Compatibility reports go through a small Cloudflare Worker, [webos-compat](https://github.com/haywirephoenix/webos-compat), shared with Tailscale.
+The optional **Compatibility** form sends reports to the original project's [webos-compat](https://github.com/haywirephoenix/webos-compat) relay.
 
 ## Licence
 

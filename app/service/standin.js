@@ -49,6 +49,7 @@ var IME = 'luna://com.webos.service.ime/';
 var YOUTUBE = 'youtube.leanback.v4';
 // Only part of an address: a whole one replaces the settings that give YouTube its mic button.
 var YOUTUBE_SEARCH = 'launch=voice&vq=';
+var YOUTUBE_ADFREE = path.join(path.dirname(APP), YOUTUBE, 'webOSUserScripts/userScript.js');
 // Kodi draws its own keyboard, out of reach of the TV's, and takes text through its own remote
 // control on this port. It answers only while "Allow remote control from applications on this
 // system" is on in Kodi, and only to this TV.
@@ -103,15 +104,24 @@ function warn(s) { write(s); }
 process.on('uncaughtException', function (e) { warn('uncaught: ' + (e && e.stack || e)); process.exit(1); });
 var palmbus = require('palmbus');
 
-// Toasts are off unless turned on in the app: then a phrase for a text box, which shows no card,
-// shows its stages as toasts, and so does a message whose card failed to open.
+// Optional toasts report text entry, YouTube searches and messages whose card failed to open.
 function toast(message) {
   if (!fs.existsSync(TOASTS)) return;
-  cp.execFile('luna-send', ['-n', '1', 'luna://com.webos.notification/createToast',
+  cp.execFile('luna-send', ['-n', '1', '-f', 'luna://com.webos.notification/createToast',
     JSON.stringify({sourceId: APP_ID, message: message, noaction: true})],
-    {timeout: 8000}, function (err) {
-      if (err) warn('toast failed: ' + String(err).slice(0, 120));
+    {timeout: 8000}, function (err, stdout) {
+      if (err) return warn('toast failed: ' + String(err).slice(0, 120));
+      try {
+        var reply = JSON.parse(stdout);
+        if (!reply.returnValue) warn('toast failed: ' + String(reply.errorText).slice(0, 120));
+      } catch (e) { warn('no toast reply'); }
     });
+}
+
+function youtubeRelaunchAvailable() {
+  try {
+    return fs.readFileSync(YOUTUBE_ADFREE, 'utf8').indexOf('t.localvoice.youtubeSearch === true') !== -1;
+  } catch (e) { return false; }
 }
 
 function hang(c) { try { c.cancel(); } catch (e) {} }
@@ -601,7 +611,14 @@ function deliver(text) {
     if (o.appId === YOUTUBE) {
       log('searching on YouTube');
       showHeard(text, '');
-      bus(MANAGER + 'launch', {id: YOUTUBE, params: {contentTarget: YOUTUBE_SEARCH + encodeURIComponent(text)}});
+      var query = YOUTUBE_SEARCH + encodeURIComponent(text);
+      // WAM can reload a hosted app before it sees a contentTarget. AdFree also accepts target
+      // for cold launches and can use webOSRelaunch to search within the running page.
+      var params = youtubeRelaunchAvailable() ?
+        {target: query, localvoice: {youtubeSearch: true}} : {contentTarget: query};
+      bus(MANAGER + 'launch', {id: YOUTUBE, params: params}, function (reply) {
+        if (reply.returnValue) toast('Searching YouTube');
+      });
       return;
     }
     if (o.appId === KODI) return kodi(text);

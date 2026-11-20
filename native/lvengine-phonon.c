@@ -5,7 +5,7 @@
 #include <string.h>
 #include "phonon25.h"
 
-#if defined(__aarch64__) && defined(__linux__)
+#if defined(__linux__)
 #include <asm/hwcap.h>
 #include <sys/auxv.h>
 #endif
@@ -14,8 +14,11 @@
 #define MAX_SAMPLES (RATE * 30)
 
 static int supported(void) {
-#if defined(__aarch64__) && defined(__linux__)
+#if defined(__ARM_FEATURE_DOTPROD) && defined(__aarch64__)
   return (getauxval(AT_HWCAP) & HWCAP_ASIMDDP) != 0;
+#elif defined(__arm__)
+  unsigned long features = getauxval(AT_HWCAP);
+  return (features & (HWCAP_NEON | HWCAP_VFPv4)) == (HWCAP_NEON | HWCAP_VFPv4);
 #else
   return 1;
 #endif
@@ -53,7 +56,11 @@ int main(int argc, char **argv) {
   if (strcmp(argv[1], "--probe") == 0) return 0;
 
   setenv("P25_THREADS", "4", 1);
+#if defined(__ARM_FEATURE_DOTPROD)
   setenv("P25_GEMM", "int8w", 1);
+#else
+  setenv("P25_GEMM", "exact", 1);
+#endif
   unsetenv("P25_CACHE_CODES");
   p25_verbose = 0;
   P25Engine *engine = p25_engine_open(argv[1]);

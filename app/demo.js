@@ -79,16 +79,18 @@ window.LV_DEMO = (function () {
   if (look === 'error') st.error = 'The speech engine stopped. See Troubleshooting.';
   if (look === 'nomodel') st.model = '';
   var models = {free: 460, chosen: st.model, running: st.model, job: null, disk_total: 2361, disk_used: 1901,
-    mem_total: 1599, mem_free: 640, engine_mb: 76, loading_mb: 0, models: [
-    {id: 'parakeet-tdt-110m-en', name: 'Parakeet TDT 110M (quantized)', recommended: true, bytes: 108035095, diskMB: 131, memoryMB: 190,
-     speed: 'about 0.9 s per second of speech', installed: false, needMB: 285,
-     url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8.tar.bz2'},
-    {id: 'moonshine-tiny-en', name: 'Moonshine tiny-en', bytes: 29858559, diskMB: 110, memoryMB: 180,
-     speed: 'about 0.3 s a phrase', installed: look !== 'nomodel', needMB: 120,
-     url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-tiny-en-int8.tar.bz2'},
-    {id: 'moonshine-base-en', name: 'Moonshine base-en', bytes: 111266225, diskMB: 360, memoryMB: 420,
-     speed: 'about 0.8 s a phrase', installed: false, needMB: 400,
-     url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-base-en-int8.tar.bz2'}]};
+    mem_total: 1599, mem_free: 640, engine_mb: 76, loading_mb: 0, models: []};
+  var catalog = new XMLHttpRequest();
+  catalog.open('GET', 'models.json');
+  catalog.onload = function () {
+    if (catalog.status && catalog.status !== 200) return;
+    models.models = JSON.parse(catalog.responseText).map(function (m) {
+      m.installed = m.id === st.model;
+      m.needMB = Math.ceil(m.bytes / 1048576) + m.diskMB + 50;
+      return m;
+    });
+  };
+  catalog.send();
   var job = null;   // a pretend download: {id, done}
   var typed = null, tuneAt = 0;   // set up answers a few seconds after it is asked
 

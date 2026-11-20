@@ -74,6 +74,7 @@ function status() {
   return {free: free, chosen: chosen(), running: read(ENGINE_MODEL), job: job(), models: LIST.filter(supported).map(function (m) {
     return {id: m.id, name: m.name, url: m.url, bytes: m.bytes, diskMB: m.diskMB, memoryMB: m.memoryMB,
       headroomMB: m.headroomMB || 0, speed: m.speed, recommended: !!m.recommended,
+      languages: m.languages, description: m.description,
       installed: installed(m.id), needMB: needMB(m), room: free >= needMB(m)};
   })};
 }

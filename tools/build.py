@@ -5,7 +5,7 @@ Downloads the engine and the C libraries into .cache (each pinned to a checksum)
 compiles native/lvengine.c for 32-bit ARM and packs the IPK.
 
 Needs Python 3 and zig (pip install ziglang).
-Usage: tools/build.py [--out dist] [--sources] [--phonon]
+Usage: tools/build.py [--out dist] [--sources] [--no-phonon]
 
 Also writes the release's manifest to dist, and docs/apps.json, the Homebrew Channel repository
 served from GitHub Pages. The checksum in both is of this build, so publish the IPK of the same
@@ -68,9 +68,9 @@ SOURCES.update(LIBRARY_SOURCES)
 SOURCES.update(LICENCES)
 UBUNTU_LICENCES = {"usr/share/doc/libc6/copyright": "glibc-copyright", "usr/share/doc/gcc-12-base/copyright": "gcc-copyright",
                    "usr/share/common-licenses/LGPL-2.1": "LGPL-2.1", "usr/share/common-licenses/GPL-3": "GPL-3"}
-REPOSITORY = "https://github.com/haywirephoenix/webos-localvoice"
-ICON = "https://raw.githubusercontent.com/haywirephoenix/webos-localvoice/main/app/largeIcon.png"
-PAGES = "https://haywirephoenix.github.io/webos-localvoice/"
+REPOSITORY = "https://github.com/golololologol/webos-localvoice"
+ICON = "https://raw.githubusercontent.com/golololologol/webos-localvoice/main/app/largeIcon.png"
+PAGES = "https://golololologol.github.io/webos-localvoice/"
 SUMMARY = "Speech recognition that runs on the TV, for the remote's microphone button and apps with their own"
 UBUNTU_LIBS = ["ld-linux-armhf.so.3", "libc.so.6", "libm.so.6", "libdl.so.2", "libpthread.so.0", "librt.so.1",
                "libgcc_s.so.1", "libstdc++.so.6"]
@@ -114,7 +114,7 @@ def ubuntu_lib(tar, index, name):
     sys.exit("missing " + name)
 
 
-def runtime_files(phonon=False):
+def runtime_files(phonon=True):
     """(path under runtime/, bytes, mode) for the engine and its libraries."""
     exe = 0o755
     files = []
@@ -156,7 +156,7 @@ def compile_engine(files):
 
 
 def phonon_files():
-    """Build the optional AArch64 engine with its own static C runtime."""
+    """Build the engine for the ARM CPUs supported by the app."""
     import ziglang
 
     work = CACHE / "phonon"
@@ -169,18 +169,26 @@ def phonon_files():
         for name in sources + headers:
             (work / name).write_bytes(tar.extractfile(prefix + "/csrc/" + name).read())
         licence = tar.extractfile(prefix + "/LICENSE").read()
+        notice = tar.extractfile(prefix + "/NOTICE").read()
     subprocess.run(["patch", "--batch", "--fuzz=0", "-p1", "-i",
                     str(ROOT / "native/phonon-decoder-weights.patch")], cwd=work, check=True)
-    binary = work / "lvengine-phonon"
-    subprocess.run([sys.executable, "-m", "ziglang", "cc", "-target", "aarch64-linux-musl",
-                    "-mcpu=baseline+dotprod", "-static", "-s", "-D_GNU_SOURCE", "-std=c11", "-O3",
-                    "-ffast-math", "-funroll-loops", "-pthread", "-I" + str(work),
-                    str(ROOT / "native/lvengine-phonon.c"), *[str(work / name) for name in sources],
-                    "-lm", "-o", str(binary)], check=True)
     musl = Path(ziglang.__file__).parent / "lib/libc/musl/COPYRIGHT"
-    return [("bin/lvengine-phonon", binary.read_bytes(), 0o755),
-            ("licences/phonon-2.5-c-LICENSE", licence, 0o644),
-            ("licences/musl-COPYRIGHT", musl.read_bytes(), 0o644)]
+    files = [("bin/lvengine-phonon", (ROOT / "native/lvengine-phonon.sh").read_bytes(), 0o755),
+             ("licences/phonon-2.5-c-LICENSE", licence, 0o644),
+             ("licences/phonon-2.5-c-NOTICE", notice, 0o644),
+             ("licences/musl-COPYRIGHT", musl.read_bytes(), 0o644)]
+    for variant, target, cpu in (("dotprod", "aarch64-linux-musl", "baseline+dotprod"),
+                                 ("arm64", "aarch64-linux-musl", "baseline"),
+                                 ("armv7", "arm-linux-musleabihf", "cortex_a7")):
+        binary = work / ("lvengine-phonon-" + variant)
+        extra = ["-include", str(ROOT / "native/phonon-armv7.h")] if variant == "armv7" else []
+        subprocess.run([sys.executable, "-m", "ziglang", "cc", "-target", target, "-mcpu=" + cpu,
+                        "-static", "-s", "-D_GNU_SOURCE", "-std=c11", "-O3",
+                        "-ffast-math", "-funroll-loops", "-pthread", "-I" + str(work), *extra,
+                        str(ROOT / "native/lvengine-phonon.c"), *[str(work / name) for name in sources],
+                        "-lm", "-o", str(binary)], check=True)
+        files.append(("bin/" + binary.name, binary.read_bytes(), 0o755))
+    return files
 
 
 def tgz(files):
@@ -255,7 +263,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", default=str(ROOT / "dist"))
     parser.add_argument("--sources", action="store_true")
-    parser.add_argument("--phonon", action="store_true", help="include the experimental multilingual AArch64 engine")
+    parser.add_argument("--no-phonon", dest="phonon", action="store_false", help="omit the multilingual engine")
+    parser.add_argument("--phonon", dest="phonon", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     info = json.loads((ROOT / "app/appinfo.json").read_text())
     version = info["version"]

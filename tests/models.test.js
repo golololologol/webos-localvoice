@@ -32,6 +32,12 @@ var tests = {
       assert.ok(m.files.indexOf('tokens.txt') >= 0, m.id);
     });
   },
+  'the model catalog includes the supported languages': function () {
+    var languages = models.find('phonon-2.5').languages;
+    assert.strictEqual(new Set(languages).size, 25);
+    ['en', 'ru', 'uk'].forEach(function (code) { assert.ok(languages.indexOf(code) >= 0); });
+    models.status().models.forEach(function (m) { assert.deepStrictEqual(m.languages, ['en']); });
+  },
   'a model missing a file is not installed': function () {
     install('parakeet-tdt-110m-en');
     fs.unlinkSync(T + '/store/models/parakeet-tdt-110m-en/joiner.int8.onnx');
